@@ -16,8 +16,7 @@ from os import listdir
 from os.path import isfile, join
 
 # Some constants
-# CHUNK_SIZE = 1024*256   # in bytes
-CHUNK_SIZE = 256   # in bytes
+CHUNK_SIZE = 20   # in bytes
 PEER_PORT_BASE = 20000
 
 assert sys.version_info >= (3, 6)
@@ -522,7 +521,7 @@ class Peer:
             self.files_mutex[filename] = threading.Lock()
 
         with self.files_mutex[filename]:
-            with open(f"{self.local_data_dir}/{filename}", "a+b") as f:
+            with os.fdopen(os.open(f"{self.local_data_dir}/{filename}", os.O_CREAT|os.O_WRONLY), 'wb') as f:
                 f.seek(write_start)
                 n_bytes = f.write(bytes_arr)
                 if n_bytes != write_size:
@@ -590,9 +589,28 @@ class Peer:
                 # Update chunks data from server
                 recipe_new = self.file_locations_request(filename)
 
+                
+                chunk_counter = {}
+                for i in range(recipe["info"]['num_chunks']):
+                    chunk_counter[i] = 0
+
                 # Get chunks in order of how rare they are
+                for pp, details in recipe_new.items():
+                    if pp not in ["info"]:
+                        for i in range(len(details["chunks"])):
+                            if details["chunks"][i][1]:
+                                chunk_counter[i] += 1
+
+                # chunk_counter = sorted(chunk_counter)
+                sorted_chunks = sorted(chunk_counter.items(), key=lambda kv: kv[1])
+
+                # logging.info(f"chunk_counter={str(chunk_counter)}")
+                # logging.info(f"sorted_chunks={str(sorted_chunks)}")
+                chunk_order = [kv[0] for kv in sorted_chunks]
+                # chunk_order.reverse()
+
                 next_chunk = None
-                for i in range(len(chunks_list)):
+                for i in chunk_order:
                     if not chunks_list[i]:
                         next_chunk = i
                         break
@@ -635,7 +653,7 @@ class Peer:
             logging.info(f"Exiting download worker # {worker_id}")
 
         # use thread pool idea
-        num_parallel = 2
+        num_parallel = min(4, recipe["info"]['num_chunks'])
         p = ThreadPool(num_parallel)
         xs = p.map(worker, range(num_parallel))
 
